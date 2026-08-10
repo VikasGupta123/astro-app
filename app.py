@@ -28,6 +28,12 @@ the key comes from the app itself (env var or secrets) rather than being
 pasted by the visitor, a per-session message cap applies (MAX_MESSAGES_PER_SESSION
 below) so a shared key can't be run up by one visitor.
 
+Note on the birth details form: it lives in the MAIN content area (not the
+sidebar). Streamlit's sidebar is collapsed by default on mobile browsers, so
+anything sidebar-only is effectively invisible to mobile visitors unless
+they know to tap the ">>" icon. Keeping it in the main area means it's
+visible on both desktop and mobile without extra taps.
+
 See README.md for full setup instructions, and DEPLOYMENT.md for how to put
 this online for others to try.
 """
@@ -78,7 +84,7 @@ QUICK_PROMPTS = [
     "Health & energy",
 ]
 
-# Explicit defaults for every sidebar form widget, keyed to session_state.
+# Explicit defaults for every birth-form widget, keyed to session_state.
 # Using a stable `key=` (rather than just `value=`) is the robust Streamlit
 # pattern - it's what stops widgets from silently resetting to their default
 # on reruns (which happen after every chart generation and every chat
@@ -199,7 +205,10 @@ def get_api_key() -> str:
 
 def sidebar_api_key():
     """API key input, shown at the very top of the sidebar so it's visible
-    no matter which tab (Chat or Kundli Milan) you're using - both need it."""
+    no matter which tab (Chat or Kundli Milan) you're using - both need it.
+    (Left in the sidebar deliberately: beta testers using the shared key
+    never need to touch this at all, so it being less prominent on mobile
+    isn't an issue the way the birth form was.)"""
     st.sidebar.header("Anthropic API key")
 
     if is_using_shared_key():
@@ -235,11 +244,12 @@ def _init_form_defaults():
             st.session_state[key] = default
 
 
-def sidebar_birth_form():
+def birth_details_form():
+    """Birth-details input form, rendered in the MAIN content area (not the
+    sidebar) so it's visible immediately on both desktop and mobile."""
     _init_form_defaults()
-    st.sidebar.header("Your birth details")
 
-    with st.sidebar.form("birth_form"):
+    with st.form("birth_form"):
         name = st.text_input("Name (optional)", key="birth_name_input")
         birth_date = st.date_input(
             "Birth date",
@@ -278,7 +288,7 @@ def sidebar_birth_form():
                 place_label = "Manually entered coordinates"
             else:
                 if not place.strip():
-                    st.sidebar.error("Please enter a birth place, or check 'use manual coordinates'.")
+                    st.error("Please enter a birth place, or check 'use manual coordinates'.")
                     return
                 lat, lon, place_label = geocode_place(place)
 
@@ -290,14 +300,15 @@ def sidebar_birth_form():
             st.session_state["place_label"] = place_label
             st.session_state["place_coords"] = (lat, lon)
             st.session_state["messages"] = []  # reset chat when a new chart is generated
-            st.sidebar.success(
+            st.success(
                 f"Found: **{place_label}**\n\nCoordinates: {lat:.4f}, {lon:.4f}\n\n"
                 "Double-check this matches where you were born - if it's off, try "
                 "adding more detail (e.g. state/country), or switch to manual "
                 "coordinates above for exact precision."
             )
+            st.rerun()
         except Exception as e:
-            st.sidebar.error(str(e))
+            st.error(str(e))
 
 
 def render_chart_summary():
@@ -385,11 +396,15 @@ def render_gochar_summary():
 def chat_tab():
     chart = st.session_state.get("chart")
     if not chart:
-        st.info("Enter your birth details in the sidebar and click **Generate my Kundli** to start chatting.")
+        st.info("Enter your birth details below and tap **Generate my Kundli** to start chatting.")
+        birth_details_form()
         return
 
     render_chart_summary()
     render_gochar_summary()
+
+    with st.expander("✏️ Edit birth details / generate a different Kundli"):
+        birth_details_form()
 
     api_key = get_api_key()
     if not api_key:
@@ -769,7 +784,6 @@ def main():
     st.caption("_For entertainment and self-reflection - not medical, legal, or financial advice._")
 
     sidebar_api_key()
-    sidebar_birth_form()
 
     tab_chat, tab_milan = st.tabs(["💬 Chat with Stella", "💑 Kundli Milan (Matching)"])
     with tab_chat:
