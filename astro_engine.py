@@ -214,6 +214,7 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
 
     Uses the Lahiri ayanamsa throughout (set globally at module import).
     """
+    swe.set_sid_mode(swe.SIDM_LAHIRI)                     
     tz = pytz.timezone(tz_name)
     local_dt = tz.localize(datetime.datetime.combine(birth_date, birth_time))
     utc_dt = local_dt.astimezone(pytz.utc)
@@ -342,6 +343,7 @@ def compute_transits(as_of: datetime.datetime = None) -> tuple:
     (for this purpose) location-independent, so no birth place is needed.
     Returns (transits_dict, as_of_datetime_used).
     """
+    swe.set_sid_mode(swe.SIDM_LAHIRI)
     if as_of is None:
         as_of = datetime.datetime.now(pytz.utc)
 
