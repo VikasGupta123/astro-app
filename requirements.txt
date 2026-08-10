@@ -1,0 +1,6 @@
+streamlit
+anthropic
+pyswisseph
+timezonefinder
+pytz
+geopy
