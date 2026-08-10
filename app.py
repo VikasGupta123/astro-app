@@ -15,8 +15,9 @@ What it does:
 3. Computes today's real planetary transits (Gochar) against your natal
    Moon sign, including Sade Sati detection - recalculated fresh every time
    you open the app, so it naturally updates day to day.
-4. Lets them chat with an AI astrologer persona whose answers are grounded
-   in all of the above, using the Claude API.
+4. Gives a one-time Stella-written overview of the full Kundli, then lets
+   them chat with an AI astrologer persona whose answers are grounded in
+   all of the above, using the Claude API.
 5. Kundli Milan: Ashtakoot compatibility matching between two people's
    charts, plus individual Mangal Dosha (Manglik) checks, a grounded
    follow-up chat about the match, and a shareable text summary.
@@ -74,7 +75,8 @@ MAX_HISTORY_MESSAGES = 20
 
 # Only enforced when using the app's own (shared) API key - see
 # is_using_shared_key() below. Counts every AI call across both the Chat tab
-# and Kundli Milan (interpretation + follow-ups) combined, per browser session.
+# (including the one-time Kundli overview) and Kundli Milan (interpretation +
+# follow-ups) combined, per browser session.
 MAX_MESSAGES_PER_SESSION = 15
 
 QUICK_PROMPTS = [
@@ -123,9 +125,10 @@ Style:
 - Warm, conversational, a little mystical, but never vague filler.
 - Keep answers focused and readable in a chat bubble (short paragraphs, no giant essays unless asked).
 - Keep every reply under roughly 250 words unless the user explicitly asks for
-  exhaustive detail (e.g. a full dasha timeline or full chart breakdown) - give
-  a concise, useful summary first and offer to go deeper rather than dumping
-  everything at once.
+  exhaustive detail (e.g. a full dasha timeline or full chart breakdown), or
+  it's the user's first full Kundli overview (see below) - give a concise,
+  useful summary first and offer to go deeper rather than dumping everything
+  at once.
 - It's fine to ask the user follow-up questions about their life to tailor the reading.
 - Never claim certainty about the future - frame things as tendencies, energies, and possibilities.
 - Note: you may only see the most recent part of a long conversation (older
@@ -144,6 +147,18 @@ Important guardrails:
 
 {gochar_text}
 """
+
+KUNDLI_OVERVIEW_INSTRUCTION = """
+
+The user is seeing their very first reading of this Kundli - this is a
+one-time full overview, not a regular chat reply. Write a warm ~300-350 word
+overview covering: their Lagna (Ascendant) and what it says about how they
+come across, their Chandra Rashi (Moon sign) and what it says about their
+inner/emotional nature, their Surya Rashi (Sun sign), their current
+Mahadasha/Antardasha and what that period tends to emphasize, and a short
+note on today's Gochar (transits) and how it's currently affecting them.
+Weave it into a cohesive reading rather than a bullet list. End by inviting
+them to ask about anything specific - career, love, health, or timing."""
 
 MILAN_SYSTEM_PROMPT = """You are "Stella", a warm, insightful AI Vedic astrologer (Jyotishi).
 
@@ -300,6 +315,7 @@ def birth_details_form():
             st.session_state["place_label"] = place_label
             st.session_state["place_coords"] = (lat, lon)
             st.session_state["messages"] = []  # reset chat when a new chart is generated
+            st.session_state["kundli_interpretation"] = None  # reset the one-time overview too
             st.success(
                 f"Found: **{place_label}**\n\nCoordinates: {lat:.4f}, {lon:.4f}\n\n"
                 "Double-check this matches where you were born - if it's off, try "
@@ -393,6 +409,40 @@ def render_gochar_summary():
             )
 
 
+def render_kundli_interpretation(chart: dict, api_key: str):
+    """One-time Stella-written overview of the full Kundli, shown right in
+    the Kundli section - same idea as the Kundli Milan interpretation, just
+    for a solo chart. Shown once per generated chart; the open-ended chat
+    below is where follow-up questions go."""
+    interpretation = st.session_state.get("kundli_interpretation")
+
+    if interpretation:
+        st.markdown("**Stella's reading of your Kundli:**")
+        st.markdown(interpretation)
+        st.divider()
+        return
+
+    if not api_key:
+        st.info("Add your Anthropic API key in the sidebar to get Stella's full reading of your Kundli.")
+        return
+
+    if st.button("✨ Get Stella's reading of your Kundli", type="primary"):
+        chart_text = chart_to_prompt_text(chart, st.session_state.get("user_name", "the user"))
+        gochar_text = gochar_to_prompt_text(chart)
+        system_prompt = (
+            SYSTEM_PROMPT_TEMPLATE.format(chart_text=chart_text, gochar_text=gochar_text)
+            + KUNDLI_OVERVIEW_INSTRUCTION
+        )
+        placeholder = st.empty()
+        interpretation = call_stella(
+            api_key, system_prompt,
+            [{"role": "user", "content": "Please give me a full reading of my Kundli."}],
+            placeholder=placeholder,
+        )
+        st.session_state["kundli_interpretation"] = interpretation
+        st.rerun()
+
+
 def chat_tab():
     chart = st.session_state.get("chart")
     if not chart:
@@ -407,6 +457,9 @@ def chat_tab():
         birth_details_form()
 
     api_key = get_api_key()
+
+    render_kundli_interpretation(chart, api_key)
+
     if not api_key:
         st.warning("Add your Anthropic API key in the sidebar to start chatting with Stella.")
         return
