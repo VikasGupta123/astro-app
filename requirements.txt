@@ -1,6 +1,8 @@
 streamlit
+streamlit-searchbox
 anthropic
 pyswisseph
 timezonefinder
 pytz
 geopy
+requests

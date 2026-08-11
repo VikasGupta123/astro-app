@@ -39,9 +39,6 @@ NAKSHATRAS = [
     "Purva Bhadrapada", "Uttara Bhadrapada", "Revati",
 ]
 
-# Short reference meanings for each of the 12 houses (Bhava) - what area of
-# life a planet placed there tends to influence. Traditional Sanskrit name
-# for each house is included since you'll see these terms elsewhere.
 HOUSE_MEANINGS = {
     1: "Self, body, personality, how you come across (Tanu Bhava)",
     2: "Wealth, family, speech, food/values (Dhana Bhava)",
@@ -57,16 +54,13 @@ HOUSE_MEANINGS = {
     12: "Losses, expenses, foreign lands, spirituality, letting go (Vyaya Bhava)",
 }
 
-# Vimshottari dasha lord cycle - fixed order, repeats every 9 lords (3x through
-# the 27 nakshatras). Years sum to 120, the length of one full Vimshottari cycle.
 DASHA_ORDER = ["Ketu", "Venus", "Sun", "Moon", "Mars", "Rahu", "Jupiter", "Saturn", "Mercury"]
 DASHA_YEARS = {
     "Ketu": 7, "Venus": 20, "Sun": 6, "Moon": 10, "Mars": 7,
     "Rahu": 18, "Jupiter": 16, "Saturn": 19, "Mercury": 17,
 }
-DASHA_YEAR_DAYS = 365.25  # standard approximation used in Vimshottari calculations
+DASHA_YEAR_DAYS = 365.25
 
-# (name, swisseph body id) - the 7 classical "graha" with direct ephemeris positions
 PLANETS = [
     ("Sun", swe.SUN),
     ("Moon", swe.MOON),
@@ -84,7 +78,7 @@ SANSKRIT_PLANET_NAMES = {
 }
 
 _tf = TimezoneFinder()
-_NAK_SPAN = 360.0 / 27.0  # 13.3333 degrees per nakshatra
+_NAK_SPAN = 360.0 / 27.0
 
 
 def sign_index(longitude: float) -> int:
@@ -102,17 +96,14 @@ def nakshatra_index(longitude: float) -> int:
 def nakshatra_pada(longitude: float) -> int:
     pos_in_nak = longitude % _NAK_SPAN
     pada_span = _NAK_SPAN / 4
-    return int(pos_in_nak // pada_span) + 1  # 1-4
+    return int(pos_in_nak // pada_span) + 1
 
 
 def house_from_index(sign_idx: int, reference_idx: int) -> int:
-    """Whole-sign house number (1-12) of a sign, counted from a reference
-    sign (e.g. the Lagna's sign, or the natal Moon's sign for Gochar)."""
     return ((sign_idx - reference_idx) % 12) + 1
 
 
 def ordinal(n: int) -> str:
-    """1 -> '1st', 2 -> '2nd', 11 -> '11th', etc."""
     if 10 <= n % 100 <= 20:
         suffix = "th"
     else:
@@ -121,7 +112,6 @@ def ordinal(n: int) -> str:
 
 
 def find_timezone(lat: float, lon: float) -> str:
-    """Look up the IANA timezone name (e.g. 'Asia/Kolkata') for a lat/lon."""
     tz_name = _tf.timezone_at(lat=lat, lng=lon)
     if not tz_name:
         raise ValueError(
@@ -132,8 +122,6 @@ def find_timezone(lat: float, lon: float) -> str:
 
 
 def _geocode_open_meteo(place_name: str):
-    """Primary geocoder: Open-Meteo's free geocoding API. Returns None if it
-    can't find/reach anything, so the caller can fall back to Nominatim."""
     import requests
 
     try:
@@ -158,8 +146,6 @@ def _geocode_open_meteo(place_name: str):
 
 
 def _geocode_nominatim(place_name: str):
-    """Fallback geocoder: OpenStreetMap Nominatim, via geopy. Returns None if
-    it can't find/reach anything."""
     try:
         from geopy.geocoders import Nominatim
 
@@ -174,10 +160,6 @@ def _geocode_nominatim(place_name: str):
 
 
 def geocode_place(place_name: str):
-    """
-    Turn a place name like 'Jaipur, India' into (lat, lon, display_name).
-    Tries two free, keyless geocoding services in order.
-    """
     for geocoder in (_geocode_open_meteo, _geocode_nominatim):
         result = geocoder(place_name)
         if result is not None:
@@ -188,6 +170,53 @@ def geocode_place(place_name: str):
         "service. Try adding the country (e.g. 'Kushinagar, India'), or check "
         "'use manual coordinates' below and enter latitude/longitude directly."
     )
+
+
+def search_places(query: str):
+    """
+    Live autocomplete for the birth-place search box: returns up to ~8
+    candidate places as the user types, as (display_label, (lat, lon,
+    display_label)) tuples for streamlit_searchbox.
+
+    Tries Open-Meteo first (fast, keyless, GeoNames-backed), and if that
+    finds nothing, falls back to Nominatim (OpenStreetMap) asking for
+    multiple matches - OSM often has smaller Indian towns/villages that
+    GeoNames doesn't, since it's community-mapped at a finer granularity.
+    Small villages can still be genuinely missing from both, in which case
+    manual latitude/longitude entry is the reliable fallback.
+    """
+    query = (query or "").strip()
+    if len(query) < 2:
+        return []
+
+    results = []
+    try:
+        import requests
+
+        resp = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": query, "count": 8, "language": "en", "format": "json"},
+            timeout=8,
+        )
+        resp.raise_for_status()
+        for r in resp.json().get("results") or []:
+            label_parts = [r.get("name"), r.get("admin2"), r.get("admin1"), r.get("country")]
+            label = ", ".join(p for p in label_parts if p)
+            results.append((label, (r["latitude"], r["longitude"], label)))
+    except Exception:
+        pass
+
+    if not results:
+        try:
+            from geopy.geocoders import Nominatim
+
+            geolocator = Nominatim(user_agent="ai_astrology_chat_app_prototype", timeout=8)
+            for loc in geolocator.geocode(query, exactly_one=False, limit=8) or []:
+                results.append((loc.address, (loc.latitude, loc.longitude, loc.address)))
+        except Exception:
+            pass
+
+    return results
 
 
 def _rashi_info(longitude: float) -> dict:
@@ -214,7 +243,7 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
 
     Uses the Lahiri ayanamsa throughout (set globally at module import).
     """
-    swe.set_sid_mode(swe.SIDM_LAHIRI)                     
+    swe.set_sid_mode(swe.SIDM_LAHIRI)
     tz = pytz.timezone(tz_name)
     local_dt = tz.localize(datetime.datetime.combine(birth_date, birth_time))
     utc_dt = local_dt.astimezone(pytz.utc)
@@ -234,7 +263,6 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
         "ayanamsa": round(swe.get_ayanamsa_ut(jd_ut), 4),
     }
 
-    # Lagna (Ascendant) first, so we know the reference sign for houses below.
     cusps, ascmc = swe.houses_ex(jd_ut, lat, lon, b"W", sidereal_flag)
     asc_long = ascmc[0]
     asc_idx = sign_index(asc_long)
@@ -243,29 +271,25 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
     for name, body_id in PLANETS:
         pos, _flag = swe.calc_ut(jd_ut, body_id, sidereal_flag)
         longitude = pos[0]
-        speed = pos[3]  # negative speed = retrograde
+        speed = pos[3]
         info = _rashi_info(longitude)
         info["retrograde"] = speed < 0
         info["house"] = house_from_index(sign_index(longitude), asc_idx)
         result["planets"][name] = info
 
-    # Rahu (mean lunar node) and Ketu (always exactly 180 deg opposite)
     rahu_pos, _flag = swe.calc_ut(jd_ut, swe.MEAN_NODE, sidereal_flag)
     rahu_long = rahu_pos[0]
     ketu_long = (rahu_long + 180) % 360
     for pname, plong in (("Rahu", rahu_long), ("Ketu", ketu_long)):
         info = _rashi_info(plong)
-        info["retrograde"] = True  # nodes are conventionally always retrograde
+        info["retrograde"] = True
         info["house"] = house_from_index(sign_index(plong), asc_idx)
         result["planets"][pname] = info
 
-    # Whole-sign houses (Bhava): house 1 = Lagna's rashi, then each house is
-    # simply the next rashi in order.
     result["houses"] = {
         h: RASHI_NAMES[(asc_idx + h - 1) % 12] for h in range(1, 13)
     }
 
-    # Vimshottari Mahadasha / Antardasha, computed from the Moon's nakshatra position
     moon_longitude = result["planets"]["Moon"]["longitude"]
     result["dasha"] = compute_vimshottari_dasha(moon_longitude, local_dt)
 
@@ -273,10 +297,6 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
 
 
 def compute_vimshottari_dasha(moon_longitude: float, birth_dt: datetime.datetime) -> list:
-    """
-    Compute the full Vimshottari Mahadasha timeline (9 mahadashas covering a
-    full 120-year cycle from birth), each with its 9 Antardasha sub-periods.
-    """
     nidx = nakshatra_index(moon_longitude)
     pos_in_nak = moon_longitude % _NAK_SPAN
     elapsed_fraction = pos_in_nak / _NAK_SPAN
@@ -284,8 +304,6 @@ def compute_vimshottari_dasha(moon_longitude: float, birth_dt: datetime.datetime
     order_start = nidx % 9
     lords = [DASHA_ORDER[(order_start + i) % 9] for i in range(9)]
 
-    # The birth mahadasha is already partway through - only the remaining
-    # balance applies; the other 8 are full-length.
     years_list = [DASHA_YEARS[lords[0]] * (1 - elapsed_fraction)] + [
         DASHA_YEARS[lord] for lord in lords[1:]
     ]
@@ -321,8 +339,6 @@ def _compute_antardashas(maha_lord: str, maha_start: datetime.datetime, maha_yea
 
 
 def find_current_dasha(dasha_list: list, as_of: datetime.datetime = None):
-    """Given a computed dasha timeline, find the Mahadasha/Antardasha active
-    at a given moment (defaults to right now)."""
     if not dasha_list:
         return None, None
     if as_of is None:
@@ -333,15 +349,13 @@ def find_current_dasha(dasha_list: list, as_of: datetime.datetime = None):
                 if antar["start"] <= as_of < antar["end"]:
                     return maha, antar
             return maha, None
-    return None, None  # birth date too far in the past/future for this timeline
+    return None, None
 
 
 def compute_transits(as_of: datetime.datetime = None) -> tuple:
     """
     Compute today's real planetary positions (Gochar) - sidereal, Lahiri
-    ayanamsa, same as the natal chart. Planet-to-zodiac positions are
-    (for this purpose) location-independent, so no birth place is needed.
-    Returns (transits_dict, as_of_datetime_used).
+    ayanamsa, same as the natal chart. Returns (transits_dict, as_of_datetime_used).
     """
     swe.set_sid_mode(swe.SIDM_LAHIRI)
     if as_of is None:
@@ -374,12 +388,6 @@ def compute_transits(as_of: datetime.datetime = None) -> tuple:
 
 
 def compute_gochar(natal_moon_longitude: float, transits: dict) -> dict:
-    """
-    Gochar = how today's transiting planets sit relative to your natal Moon
-    sign (Chandra Rashi). Vedic daily predictions are traditionally counted
-    from the Moon rather than the Lagna, because the Moon reflects your
-    mental/emotional state moment to moment.
-    """
     natal_moon_idx = sign_index(natal_moon_longitude)
     gochar = {}
     for planet, data in transits.items():
@@ -389,13 +397,6 @@ def compute_gochar(natal_moon_longitude: float, transits: dict) -> dict:
 
 
 def check_sade_sati(gochar: dict) -> dict:
-    """
-    Sade Sati ("the seven and a half") is Saturn's roughly 7.5-year transit
-    through the 12th, 1st, and 2nd houses counted from your natal Moon sign
-    (Saturn takes ~2.5 years to cross each sign). It's one of the
-    most-discussed periods in Vedic astrology, generally associated with
-    major life restructuring/challenges followed by growth.
-    """
     house = gochar["Saturn"]["house_from_moon"]
     if house == 12:
         return {"active": True, "phase": "Rising phase (Arohi) - the first ~2.5 years"}
@@ -407,7 +408,6 @@ def check_sade_sati(gochar: dict) -> dict:
 
 
 def chart_to_prompt_text(chart: dict, name: str = "the user") -> str:
-    """Turn a calculated Vedic chart into a compact text block to feed the AI as context."""
     lines = [
         f"Vedic birth chart (Kundli) for {name}, sidereal/Lahiri ayanamsa "
         f"({chart['ayanamsa']}°):",
@@ -454,7 +454,6 @@ def chart_to_prompt_text(chart: dict, name: str = "the user") -> str:
 
 
 def gochar_to_prompt_text(chart: dict) -> str:
-    """Compute today's transits/Gochar/Sade-Sati and format as text for the AI."""
     transits, as_of = compute_transits()
     natal_moon_longitude = chart["planets"]["Moon"]["longitude"]
     gochar = compute_gochar(natal_moon_longitude, transits)
@@ -483,26 +482,12 @@ def gochar_to_prompt_text(chart: dict) -> str:
 # =============================================================================
 # Ashtakoot Kundli Milan (marriage compatibility matching) + Mangal Dosha
 # =============================================================================
-#
-# Ashtakoot ("eight factors") compares the Moon's Rashi and Nakshatra of two
-# people across 8 weighted factors summing to 36 points, used traditionally
-# as a first-pass compatibility screen before marriage in Vedic astrology.
-# This implementation follows the standard classical tables; some koots
-# (Vashya, Yoni, Gana) use commonly-published simplified versions rather
-# than every regional/textual variation - noted inline. This is for
-# entertainment/reference; real matching decisions traditionally also weigh
-# dosha cancellations and full chart analysis that a professional astrologer
-# would consider.
 
 RASHI_LORDS = [
     "Mars", "Venus", "Mercury", "Moon", "Sun", "Mercury",
     "Venus", "Mars", "Jupiter", "Saturn", "Saturn", "Jupiter",
-]  # indexed by RASHI_NAMES order (Mesha..Meena)
+]
 
-# Naisargika Maitri (natural planetary friendship) - classical table.
-# Note it is NOT always symmetric (e.g. Mercury sees Sun as a friend, but Sun
-# sees Mercury as neutral) - that asymmetry is a genuine, well-documented
-# feature of the classical system, not an error.
 PLANET_FRIENDSHIP = {
     "Sun":     {"Moon": "friend", "Mars": "friend", "Jupiter": "friend", "Mercury": "neutral", "Venus": "enemy", "Saturn": "enemy"},
     "Moon":    {"Sun": "friend", "Mercury": "friend", "Mars": "neutral", "Jupiter": "neutral", "Venus": "neutral", "Saturn": "neutral"},
@@ -521,9 +506,6 @@ RASHI_VARNA = {
 }
 VARNA_RANK = {"Brahmin": 4, "Kshatriya": 3, "Vaishya": 2, "Shudra": 1}
 
-# Vashya groups (simplified, whole-rashi convention commonly used in
-# practice; classical texts split Dhanu/Makar by half - handled below using
-# the actual degree rather than the simplified whole-sign version).
 VASHYA_GROUP_WHOLE = {
     "Mesha": "Chatushpada", "Vrishabha": "Chatushpada", "Simha": "Chatushpada",
     "Mithuna": "Manav", "Kanya": "Manav", "Tula": "Manav", "Kumbha": "Manav",
@@ -596,11 +578,10 @@ NAKSHATRA_NADI = {
 def _vashya_group(moon_longitude: float) -> str:
     rashi = RASHI_NAMES[sign_index(moon_longitude)]
     if rashi in ("Dhanu", "Makar"):
-        # Classical texts split these two signs' Vashya group by half.
         deg = degree_in_sign(moon_longitude)
         if rashi == "Dhanu":
             return "Chatushpada" if deg < 15 else "Manav"
-        else:  # Makar
+        else:
             return "Chatushpada" if deg < 15 else "Jalachar"
     return VASHYA_GROUP_WHOLE[rashi]
 
@@ -608,15 +589,13 @@ def _vashya_group(moon_longitude: float) -> str:
 def _koot_varna(rashi_a: str, rashi_b: str) -> dict:
     va, vb = RASHI_VARNA[rashi_a], RASHI_VARNA[rashi_b]
     points = 1 if VARNA_RANK[va] >= VARNA_RANK[vb] else 0
-    return {"name": "Varna", "max": 1, "points": points,
-            "detail": f"{va} & {vb}"}
+    return {"name": "Varna", "max": 1, "points": points, "detail": f"{va} & {vb}"}
 
 
 def _koot_vashya(moon_a: float, moon_b: float) -> dict:
     ga, gb = _vashya_group(moon_a), _vashya_group(moon_b)
     points = VASHYA_COMPATIBILITY.get(frozenset([ga, gb]), 1)
-    return {"name": "Vashya", "max": 2, "points": points,
-            "detail": f"{ga} & {gb}"}
+    return {"name": "Vashya", "max": 2, "points": points, "detail": f"{ga} & {gb}"}
 
 
 def _koot_tara(nak_a: int, nak_b: int) -> dict:
@@ -630,8 +609,7 @@ def _koot_tara(nak_a: int, nak_b: int) -> dict:
         points = 1.5
     else:
         points = 0
-    return {"name": "Tara", "max": 3, "points": points,
-            "detail": f"counts {count_ab}/{count_ba} of 9"}
+    return {"name": "Tara", "max": 3, "points": points, "detail": f"counts {count_ab}/{count_ba} of 9"}
 
 
 def _koot_yoni(nak_a: str, nak_b: str) -> dict:
@@ -642,8 +620,7 @@ def _koot_yoni(nak_a: str, nak_b: str) -> dict:
         points = 0
     else:
         points = 2
-    return {"name": "Yoni", "max": 4, "points": points,
-            "detail": f"{ya} & {yb}"}
+    return {"name": "Yoni", "max": 4, "points": points, "detail": f"{ya} & {yb}"}
 
 
 def _koot_graha_maitri(rashi_a: str, rashi_b: str) -> dict:
@@ -665,10 +642,9 @@ def _koot_graha_maitri(rashi_a: str, rashi_b: str) -> dict:
             points = 1
         elif rels == {"neutral", "enemy"}:
             points = 0.5
-        else:  # both enemy
+        else:
             points = 0
-    return {"name": "Graha Maitri", "max": 5, "points": points,
-            "detail": f"lords {lord_a} & {lord_b}"}
+    return {"name": "Graha Maitri", "max": 5, "points": points, "detail": f"lords {lord_a} & {lord_b}"}
 
 
 def _koot_gana(nak_a: str, nak_b: str) -> dict:
@@ -679,10 +655,9 @@ def _koot_gana(nak_a: str, nak_b: str) -> dict:
         points = 5
     elif {ga, gb} == {"Manushya", "Rakshasa"}:
         points = 3
-    else:  # Deva & Rakshasa - traditionally the most discordant pairing
+    else:
         points = 0
-    return {"name": "Gana", "max": 6, "points": points,
-            "detail": f"{ga} & {gb}"}
+    return {"name": "Gana", "max": 6, "points": points, "detail": f"{ga} & {gb}"}
 
 
 def _koot_bhakoot(rashi_a: str, rashi_b: str) -> dict:
@@ -690,24 +665,17 @@ def _koot_bhakoot(rashi_a: str, rashi_b: str) -> dict:
     diff = ((idx_b - idx_a) % 12) + 1
     dosha = diff in (2, 12, 5, 9, 6, 8)
     points = 0 if dosha else 7
-    return {"name": "Bhakoot", "max": 7, "points": points,
-            "detail": "Bhakoot Dosha present" if dosha else "no dosha"}
+    return {"name": "Bhakoot", "max": 7, "points": points, "detail": "Bhakoot Dosha present" if dosha else "no dosha"}
 
 
 def _koot_nadi(nak_a: str, nak_b: str) -> dict:
     na, nb = NAKSHATRA_NADI[nak_a], NAKSHATRA_NADI[nak_b]
     dosha = na == nb
     points = 0 if dosha else 8
-    return {"name": "Nadi", "max": 8, "points": points,
-            "detail": "Nadi Dosha present (same Nadi)" if dosha else f"{na} & {nb}"}
+    return {"name": "Nadi", "max": 8, "points": points, "detail": "Nadi Dosha present (same Nadi)" if dosha else f"{na} & {nb}"}
 
 
 def compute_kundli_milan(chart_a: dict, chart_b: dict) -> dict:
-    """
-    Ashtakoot Guna Milan between two natal charts (based on each person's
-    Moon Rashi and Nakshatra). Returns each koot's score plus a total out
-    of 36, with a standard interpretation band.
-    """
     moon_a, moon_b = chart_a["planets"]["Moon"], chart_b["planets"]["Moon"]
 
     koots = [
@@ -742,12 +710,6 @@ def compute_kundli_milan(chart_a: dict, chart_b: dict) -> dict:
 
 
 def check_mangal_dosha(chart: dict) -> dict:
-    """
-    Mangal Dosha (Manglik status): traditionally checked when Mars occupies
-    the 1st, 2nd, 4th, 7th, 8th, or 12th house from the Lagna (some
-    traditions also check from the Moon and from Venus - this implementation
-    uses the most common definition, from the Lagna only).
-    """
     mars_house = chart["planets"]["Mars"]["house"]
     dosha_houses = {1, 2, 4, 7, 8, 12}
     active = mars_house in dosha_houses
@@ -763,7 +725,6 @@ def check_mangal_dosha(chart: dict) -> dict:
 
 def milan_to_prompt_text(name_a: str, chart_a: dict, name_b: str, chart_b: dict,
                           milan: dict, mangal_a: dict, mangal_b: dict) -> str:
-    """Format a computed Kundli Milan result as text for the AI to interpret."""
     lines = [
         f"Kundli Milan (Ashtakoot compatibility matching) between {name_a} and {name_b}:",
         f"- {name_a} Chandra Rashi/Nakshatra: {chart_a['planets']['Moon']['rashi']} "

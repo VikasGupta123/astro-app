@@ -7,7 +7,8 @@ Run it with:
     streamlit run app.py
 
 What it does:
-1. Takes the user's birth date, time, and place.
+1. Takes the user's birth date, time, and place (with live search-as-you-type
+   suggestions for the place, backed by astro_engine.search_places).
 2. Calculates their real Vedic birth chart / Kundli (astro_engine.py, using
    Swiss Ephemeris with the Lahiri ayanamsa): Rashi, Nakshatra, Lagna,
    Rahu/Ketu, whole-sign houses (with each planet's house/Bhava placement),
@@ -35,6 +36,13 @@ anything sidebar-only is effectively invisible to mobile visitors unless
 they know to tap the ">>" icon. Keeping it in the main area means it's
 visible on both desktop and mobile without extra taps.
 
+Note on birth-place input: it uses a live search-as-you-type box
+(streamlit_searchbox) instead of a plain text field, so the user picks from
+real matching places rather than typing a guess and hoping the geocoder
+resolves it correctly. This is deliberately NOT wrapped in an st.form,
+because Streamlit forms only rerun on submit - a live-search box needs to
+rerun on every keystroke to fetch new suggestions.
+
 See README.md for full setup instructions, and DEPLOYMENT.md for how to put
 this online for others to try.
 """
@@ -44,6 +52,7 @@ import os
 
 import streamlit as st
 from anthropic import Anthropic
+from streamlit_searchbox import st_searchbox
 
 from astro_engine import (
     HOUSE_MEANINGS,
@@ -56,10 +65,10 @@ from astro_engine import (
     compute_transits,
     find_current_dasha,
     find_timezone,
-    geocode_place,
     gochar_to_prompt_text,
     milan_to_prompt_text,
     ordinal,
+    search_places,
 )
 
 st.set_page_config(page_title="AI Astrology Chat", page_icon="✨", layout="centered")
@@ -95,7 +104,6 @@ FORM_DEFAULTS = {
     "birth_name_input": "",
     "birth_date_input": datetime.date(2000, 1, 1),
     "birth_time_input": datetime.time(12, 0),
-    "birth_place_input": "",
     "manual_coords_checkbox": False,
     "lat_input": 0.0,
     "lon_input": 0.0,
@@ -261,51 +269,57 @@ def _init_form_defaults():
 
 def birth_details_form():
     """Birth-details input form, rendered in the MAIN content area (not the
-    sidebar) so it's visible immediately on both desktop and mobile."""
+    sidebar) so it's visible immediately on both desktop and mobile.
+
+    Deliberately NOT wrapped in st.form - the place search box needs to
+    rerun on every keystroke to fetch live suggestions, which st.form
+    (submit-only reruns) would block.
+    """
     _init_form_defaults()
 
-    with st.form("birth_form"):
-        name = st.text_input("Name (optional)", key="birth_name_input")
-        birth_date = st.date_input(
-            "Birth date",
-            min_value=datetime.date(1920, 1, 1),
-            max_value=datetime.date.today(),
-            key="birth_date_input",
-        )
-        birth_time = st.time_input("Birth time (as accurate as possible)", key="birth_time_input")
+    name = st.text_input("Name (optional)", key="birth_name_input")
+    birth_date = st.date_input(
+        "Birth date",
+        min_value=datetime.date(1920, 1, 1),
+        max_value=datetime.date.today(),
+        key="birth_date_input",
+    )
+    birth_time = st.time_input("Birth time (as accurate as possible)", key="birth_time_input")
 
-        st.caption("Birth place")
-        place = st.text_input("City, Country", placeholder="e.g. Jaipur, India", key="birth_place_input")
+    st.caption("Birth place - start typing and pick from the suggestions that appear")
+    selected_place = st_searchbox(
+        search_places,
+        key="birth_place_searchbox",
+        placeholder="e.g. Jaipur, Uttar Pradesh, India",
+    )
+    st.caption(
+        "Can't find your exact village/town in the suggestions? Try just the "
+        "district or nearest bigger town, or use exact coordinates below "
+        "instead - very small villages aren't always in the map databases "
+        "these suggestions come from."
+    )
+
+    with st.expander("Optional: enter latitude/longitude manually instead"):
         st.caption(
-            "Free place lookup can be off by a few to ~15km (it resolves to a "
-            "representative point for the town, not a specific address). That's "
-            "fine for most readings. For maximum precision - especially the "
-            "Lagna (Ascendant) - use exact coordinates below instead."
+            "For the most accurate chart: open Google Maps, right-click your "
+            "exact birth location (e.g. the hospital or town center), and click "
+            "the coordinates that pop up to copy them - then paste the two "
+            "numbers in below."
         )
+        manual = st.checkbox("Use manual coordinates instead of place name", key="manual_coords_checkbox")
+        lat_manual = st.number_input("Latitude", format="%.6f", key="lat_input")
+        lon_manual = st.number_input("Longitude", format="%.6f", key="lon_input")
 
-        with st.expander("Optional: enter latitude/longitude manually instead"):
-            st.caption(
-                "For the most accurate chart: open Google Maps, right-click your "
-                "exact birth location (e.g. the hospital or town center), and click "
-                "the coordinates that pop up to copy them - then paste the two "
-                "numbers in below."
-            )
-            manual = st.checkbox("Use manual coordinates instead of place name", key="manual_coords_checkbox")
-            lat_manual = st.number_input("Latitude", format="%.6f", key="lat_input")
-            lon_manual = st.number_input("Longitude", format="%.6f", key="lon_input")
-
-        submitted = st.form_submit_button("Generate my Kundli")
-
-    if submitted:
+    if st.button("Generate my Kundli", type="primary"):
         try:
             if manual:
                 lat, lon = lat_manual, lon_manual
                 place_label = "Manually entered coordinates"
             else:
-                if not place.strip():
-                    st.error("Please enter a birth place, or check 'use manual coordinates'.")
+                if not selected_place:
+                    st.error("Please select a birth place from the suggestions above, or check 'use manual coordinates'.")
                     return
-                lat, lon, place_label = geocode_place(place)
+                lat, lon, place_label = selected_place
 
             tz_name = find_timezone(lat, lon)
             chart = calculate_chart(birth_date, birth_time, lat, lon, tz_name)
@@ -316,12 +330,7 @@ def birth_details_form():
             st.session_state["place_coords"] = (lat, lon)
             st.session_state["messages"] = []  # reset chat when a new chart is generated
             st.session_state["kundli_interpretation"] = None  # reset the one-time overview too
-            st.success(
-                f"Found: **{place_label}**\n\nCoordinates: {lat:.4f}, {lon:.4f}\n\n"
-                "Double-check this matches where you were born - if it's off, try "
-                "adding more detail (e.g. state/country), or switch to manual "
-                "coordinates above for exact precision."
-            )
+            st.success(f"Using **{place_label}** ({lat:.4f}, {lon:.4f}) for your Kundli.")
             st.rerun()
         except Exception as e:
             st.error(str(e))
@@ -590,9 +599,9 @@ def call_stella(api_key: str, system_prompt: str, api_messages: list,
 
 MILAN_FORM_DEFAULTS = {
     "groom_name": "", "groom_date": datetime.date(1995, 1, 1), "groom_time": datetime.time(12, 0),
-    "groom_place": "", "groom_manual": False, "groom_lat": 0.0, "groom_lon": 0.0,
+    "groom_manual": False, "groom_lat": 0.0, "groom_lon": 0.0,
     "bride_name": "", "bride_date": datetime.date(1997, 1, 1), "bride_time": datetime.time(12, 0),
-    "bride_place": "", "bride_manual": False, "bride_lat": 0.0, "bride_lon": 0.0,
+    "bride_manual": False, "bride_lat": 0.0, "bride_lon": 0.0,
 }
 
 
@@ -611,7 +620,12 @@ def _person_form(prefix: str, label: str):
         max_value=datetime.date.today(), key=f"{prefix}_date",
     )
     st.time_input("Birth time", key=f"{prefix}_time")
-    st.text_input("City, Country", placeholder="e.g. Jaipur, India", key=f"{prefix}_place")
+    st.caption("Birth place - start typing and pick from the suggestions")
+    st_searchbox(
+        search_places,
+        key=f"{prefix}_place_searchbox",
+        placeholder="e.g. Jaipur, Uttar Pradesh, India",
+    )
     with st.expander("Enter coordinates manually instead"):
         st.checkbox("Use manual coordinates", key=f"{prefix}_manual")
         st.number_input("Latitude", format="%.6f", key=f"{prefix}_lat")
@@ -627,10 +641,10 @@ def _build_chart_from_person_form(prefix: str):
         lat, lon = st.session_state[f"{prefix}_lat"], st.session_state[f"{prefix}_lon"]
         place_label = "Manually entered coordinates"
     else:
-        place = st.session_state[f"{prefix}_place"]
-        if not place.strip():
-            raise ValueError(f"Please enter a birth place for {name}, or use manual coordinates.")
-        lat, lon, place_label = geocode_place(place)
+        selected = st.session_state.get(f"{prefix}_place_searchbox")
+        if not selected:
+            raise ValueError(f"Please select a birth place for {name} from the suggestions, or use manual coordinates.")
+        lat, lon, place_label = selected
     tz_name = find_timezone(lat, lon)
     chart = calculate_chart(
         st.session_state[f"{prefix}_date"], st.session_state[f"{prefix}_time"], lat, lon, tz_name
