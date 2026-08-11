@@ -21,8 +21,9 @@ What it does:
    Moon sign, including Sade Sati detection - recalculated fresh every time
    you open the app, so it naturally updates day to day.
 5. Gives a one-time Stella-written interpretation of the full Kundli, then
-   lets them chat with an AI astrologer persona whose answers are grounded
-   in all of the above, using the Claude API.
+   lets them chat with an AI astrologer persona (styled as left/right chat
+   bubbles, Stella on the left) whose answers are grounded in all of the
+   above, using the Claude API.
 6. Kundli Milan: Ashtakoot compatibility matching between two people's
    charts, plus individual Mangal Dosha (Manglik) checks, a grounded
    follow-up chat about the match, and a shareable text summary.
@@ -48,10 +49,12 @@ because Streamlit forms only rerun on submit - a live-search box needs to
 rerun on every keystroke to fetch new suggestions.
 
 Note on styling: colors/fonts come from .streamlit/config.toml (a soft
-light lavender theme). A small amount of extra CSS is injected below for
-the chart diagram and highlight cards specifically - kept minimal and
-scoped to custom classes (not Streamlit's internal element names) so it's
-less likely to break on a Streamlit version bump.
+light lavender theme). Extra CSS is injected below for the chart diagram,
+highlight cards, and chat bubble left/right layout - scoped to Streamlit's
+documented `data-testid` attributes (stChatMessage, stChatMessageAvatarUser,
+etc.) rather than internal class names, which is the more stable way to
+target Streamlit's built-in components, though these testids can still
+change on a major Streamlit version bump.
 
 See README.md for full setup instructions, and DEPLOYMENT.md for how to put
 this online for others to try.
@@ -87,6 +90,14 @@ st.set_page_config(page_title="AI Astrology Chat", page_icon="✨", layout="cent
 
 MODEL = "claude-sonnet-5"
 MAX_TOKENS = 4096
+
+# Stella's avatar in the chat. Unicode doesn't have a literal "Buddha statue"
+# emoji, so this is the closest fit (a meditating figure) - if you have an
+# actual Buddha image you'd like used instead, save it as e.g.
+# "stella_avatar.png" in this same folder and change STELLA_AVATAR below to
+# that filename; st.chat_message's avatar parameter accepts a local image
+# path directly.
+STELLA_AVATAR = "🧘"
 
 # Cost/context control: only the most recent N messages (user + assistant combined)
 # are sent to the API as conversation history. Older messages stay visible on
@@ -142,8 +153,14 @@ Style:
 - When discussing a planet's effect, connect its house placement to what
   that house governs (use the house meaning given to you) rather than just
   naming the sign.
+- Format for easy reading on a phone screen: short paragraphs (2-4
+  sentences each), and use a markdown bullet list whenever you're covering
+  several distinct things (multiple planets, transits, or factors) rather
+  than cramming them into one dense paragraph.
+- Bold the single most important takeaway or phrase in each response (e.g.
+  "**a good week to have that money conversation**") so it's easy to spot
+  at a glance - don't over-bold, just the key point(s).
 - Warm, conversational, a little mystical, but never vague filler.
-- Keep answers focused and readable in a chat bubble (short paragraphs, no giant essays unless asked).
 - Keep every reply under roughly 250 words unless the user explicitly asks for
   exhaustive detail (e.g. a full dasha timeline or full chart breakdown), or
   it's the user's first full Kundli overview (see below) - give a concise,
@@ -177,7 +194,9 @@ come across, their Chandra Rashi (Moon sign) and what it says about their
 inner/emotional nature, their Surya Rashi (Sun sign), their current
 Mahadasha/Antardasha and what that period tends to emphasize, and a short
 note on today's Gochar (transits) and how it's currently affecting them.
-Weave it into a cohesive reading rather than a bullet list. End by inviting
+Use short paragraphs and feel free to use a bullet list for the
+Mahadasha/Gochar section - this should read as a structured reading, not a
+wall of unbroken text. Bold the 1-2 most important takeaways. End by inviting
 them to ask about anything specific - career, love, health, or timing."""
 
 MILAN_SYSTEM_PROMPT = """You are "Stella", a warm, insightful AI Vedic astrologer (Jyotishi).
@@ -196,16 +215,19 @@ When first asked to interpret: write a warm, readable interpretation
 suggests, the 2-3 koots that stand out (best and weakest) and what they mean
 practically, whether any dosha (Nadi/Bhakoot/Mangal) is present and what
 that traditionally implies, and a grounded closing note. Use Sanskrit terms
-with English in parentheses on first mention. Be encouraging but honest -
-don't oversell a weak match or undersell a strong one. End by noting this is
-a traditional first-pass screening tool for entertainment/reference, and
-real marriage decisions should also weigh compatibility of values,
-communication, and life goals - not just Kundli matching - and that a
-qualified astrologer can assess dosha cancellations this simplified tool
-doesn't check for.
+with English in parentheses on first mention. Format for easy reading: short
+paragraphs, a bullet list for the standout koots rather than a dense
+paragraph, and bold the 1-2 most important takeaways. Be encouraging but
+honest - don't oversell a weak match or undersell a strong one. End by
+noting this is a traditional first-pass screening tool for
+entertainment/reference, and real marriage decisions should also weigh
+compatibility of values, communication, and life goals - not just Kundli
+matching - and that a qualified astrologer can assess dosha cancellations
+this simplified tool doesn't check for.
 
-For follow-up questions: answer conversationally and keep it under ~200
-words unless more detail is genuinely asked for.
+For follow-up questions: answer conversationally, use bullets/bold where it
+aids readability, and keep it under ~200 words unless more detail is
+genuinely asked for.
 
 {milan_text}
 """
@@ -214,9 +236,9 @@ words unless more detail is genuinely asked for.
 def inject_custom_css():
     """A small amount of custom styling on top of the .streamlit/config.toml
     theme: the South Indian chart diagram grid, the quick-highlight stat
-    cards, and slightly rounder buttons. Scoped to custom CSS classes rather
-    than Streamlit's internal element names, so it's less likely to break on
-    a Streamlit version bump."""
+    cards, rounder buttons, and left/right chat bubbles (Stella on the
+    left, you on the right). The chat bubble rules key off Streamlit's
+    `data-testid` attributes for chat messages."""
     st.markdown(
         """
         <style>
@@ -331,6 +353,34 @@ def inject_custom_css():
             font-weight: 700;
             font-size: 1rem;
             opacity: 0.45;
+        }
+
+        /* Chat bubbles: Stella (custom avatar) on the left, you (default
+           user avatar) on the right. Streamlit renders each chat message
+           as a flex row of [avatar, content]; reversing the row for user
+           messages puts the avatar on the right and pushes the bubble
+           along with it. */
+        div[data-testid="stChatMessageContent"] {
+            max-width: 80%;
+            border-radius: 14px;
+            padding: 10px 14px;
+        }
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarCustom"]) {
+            justify-content: flex-start;
+        }
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarCustom"]) div[data-testid="stChatMessageContent"] {
+            background: #ffffff;
+            border: 1px solid #e2d6f7;
+            border-radius: 4px 14px 14px 14px;
+        }
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) {
+            flex-direction: row-reverse;
+            justify-content: flex-start;
+        }
+        div[data-testid="stChatMessage"]:has(div[data-testid="stChatMessageAvatarUser"]) div[data-testid="stChatMessageContent"] {
+            background: #efe3fb;
+            border-radius: 14px 4px 14px 14px;
+            margin-left: auto;
         }
         </style>
         """,
@@ -691,7 +741,8 @@ def chat_tab():
         )
 
     for msg in st.session_state["messages"]:
-        with st.chat_message(msg["role"]):
+        avatar = STELLA_AVATAR if msg["role"] == "assistant" else None
+        with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
     # Quick-tap suggested prompts - clicking one sends it exactly as if typed.
@@ -719,7 +770,9 @@ def chat_tab():
         history_to_send = st.session_state["messages"][-MAX_HISTORY_MESSAGES:]
         api_messages = [{"role": m["role"], "content": m["content"]} for m in history_to_send]
 
-        response_text = call_stella(api_key, system_prompt, api_messages)
+        with st.chat_message("assistant", avatar=STELLA_AVATAR):
+            placeholder = st.empty()
+            response_text = call_stella(api_key, system_prompt, api_messages, placeholder=placeholder)
         st.session_state["messages"].append({"role": "assistant", "content": response_text})
         st.rerun()  # clears the quick-prompt buttons' one-shot click state cleanly
 
@@ -1025,7 +1078,8 @@ def milan_tab():
         st.session_state["milan_messages"] = []
 
     for msg in st.session_state["milan_messages"]:
-        with st.chat_message(msg["role"]):
+        avatar = STELLA_AVATAR if msg["role"] == "assistant" else None
+        with st.chat_message(msg["role"], avatar=avatar):
             st.markdown(msg["content"])
 
     followup = st.chat_input(
@@ -1043,7 +1097,7 @@ def milan_tab():
         history = st.session_state["milan_messages"][-MAX_HISTORY_MESSAGES:]
         api_messages = [{"role": m["role"], "content": m["content"]} for m in history]
 
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar=STELLA_AVATAR):
             placeholder = st.empty()
             response = call_stella(api_key, system_prompt, api_messages, placeholder=placeholder)
         st.session_state["milan_messages"].append({"role": "assistant", "content": response})

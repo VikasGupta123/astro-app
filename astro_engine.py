@@ -78,25 +78,16 @@ SANSKRIT_PLANET_NAMES = {
     "Rahu": "Rahu", "Ketu": "Ketu",
 }
 
-# Short 2-letter labels for the chart diagram cells (kept for reference /
-# possible future compact-view mode; the diagram currently uses full names).
 PLANET_ABBR = {
     "Sun": "Su", "Moon": "Mo", "Mercury": "Me", "Venus": "Ve", "Mars": "Ma",
     "Jupiter": "Ju", "Saturn": "Sa", "Rahu": "Ra", "Ketu": "Ke",
 }
 
-# Classical astrological glyphs, used for a bit of visual polish next to
-# planet names in the full breakdown.
 PLANET_SYMBOLS = {
     "Sun": "☉", "Moon": "☽", "Mercury": "☿", "Venus": "♀", "Mars": "♂",
     "Jupiter": "♃", "Saturn": "♄", "Rahu": "☊", "Ketu": "☋",
 }
 
-# South Indian chart layout: a fixed 4x4 grid where each Rashi always sits in
-# the same cell (unlike North Indian charts, where the Lagna's compartment is
-# always drawn at the top and everything rotates around it). The 4 center
-# cells are unused/merged into one decorative block. Values are indices into
-# RASHI_NAMES/RASHI_ENGLISH; None marks the unused center cells.
 SOUTH_INDIAN_LAYOUT = [
     [11, 0, 1, 2],
     [10, None, None, 3],
@@ -149,8 +140,6 @@ def find_timezone(lat: float, lon: float) -> str:
 
 
 def _geocode_open_meteo(place_name: str):
-    """Primary geocoder: Open-Meteo's free geocoding API. Returns None if it
-    can't find/reach anything, so the caller can fall back to Nominatim."""
     import requests
 
     try:
@@ -175,8 +164,6 @@ def _geocode_open_meteo(place_name: str):
 
 
 def _geocode_nominatim(place_name: str):
-    """Fallback geocoder: OpenStreetMap Nominatim, via geopy. Returns None if
-    it can't find/reach anything."""
     try:
         from geopy.geocoders import Nominatim
 
@@ -191,10 +178,6 @@ def _geocode_nominatim(place_name: str):
 
 
 def geocode_place(place_name: str):
-    """
-    Turn a place name like 'Jaipur, India' into (lat, lon, display_name).
-    Tries two free, keyless geocoding services in order.
-    """
     for geocoder in (_geocode_open_meteo, _geocode_nominatim):
         result = geocoder(place_name)
         if result is not None:
@@ -208,18 +191,6 @@ def geocode_place(place_name: str):
 
 
 def search_places(query: str):
-    """
-    Live autocomplete for the birth-place search box: returns up to ~8
-    candidate places as the user types, as (display_label, (lat, lon,
-    display_label)) tuples for streamlit_searchbox.
-
-    Tries Open-Meteo first (fast, keyless, GeoNames-backed), and if that
-    finds nothing, falls back to Nominatim (OpenStreetMap) asking for
-    multiple matches - OSM often has smaller Indian towns/villages that
-    GeoNames doesn't, since it's community-mapped at a finer granularity.
-    Small villages can still be genuinely missing from both, in which case
-    manual latitude/longitude entry is the reliable fallback.
-    """
     query = (query or "").strip()
     if len(query) < 2:
         return []
@@ -269,23 +240,6 @@ def _rashi_info(longitude: float) -> dict:
 
 def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
                      lat: float, lon: float, tz_name: str) -> dict:
-    """
-    Compute a full Vedic/sidereal birth chart (Kundli):
-      - Rashi (sidereal sign) + Nakshatra + Pada + house (Bhava) for each
-        graha, Lagna (Ascendant), Rahu and Ketu.
-      - Whole-sign houses (Bhava) from the Lagna.
-      - A computed Vimshottari Mahadasha/Antardasha timeline from birth.
-
-    Uses the Lahiri ayanamsa throughout (set globally at module import, and
-    re-pinned here defensively - see note below).
-    """
-    # Re-set the sidereal mode right before use. In principle this is
-    # already set once at module import, but some hosting environments
-    # (observed on Streamlit Community Cloud) can end up with the Swiss
-    # Ephemeris library's global sidereal-mode state reverting to its
-    # default (Fagan-Bradley) between reruns of the script - re-setting it
-    # here every time is a cheap, defensive fix that removed a real
-    # ayanamsa discrepancy we hit between local and deployed results.
     swe.set_sid_mode(swe.SIDM_LAHIRI)
     tz = pytz.timezone(tz_name)
     local_dt = tz.localize(datetime.datetime.combine(birth_date, birth_time))
@@ -340,19 +294,6 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
 
 
 def build_south_indian_grid(chart: dict) -> list:
-    """
-    Returns a 4x4 grid (list of lists) for rendering a South Indian style
-    Kundli chart diagram. Each cell is either None (the two unused center
-    cells) or a dict:
-      {rashi, rashi_english, house (1-12, from this chart's Lagna),
-       is_lagna (bool), planets: [{"name", "abbr", "retrograde"}]}
-
-    South Indian charts use FIXED sign positions - each Rashi always sits in
-    the same grid cell no matter whose chart it is - unlike North Indian
-    charts where the Lagna's compartment is always drawn at the top and
-    everything rotates. The house number written inside each cell is what
-    changes from person to person.
-    """
     rashi_to_house = {rashi: house for house, rashi in chart["houses"].items()}
     planets_by_rashi = {}
     for pname, pdata in chart["planets"].items():
@@ -439,10 +380,6 @@ def find_current_dasha(dasha_list: list, as_of: datetime.datetime = None):
 
 
 def compute_transits(as_of: datetime.datetime = None) -> tuple:
-    """
-    Compute today's real planetary positions (Gochar) - sidereal, Lahiri
-    ayanamsa, same as the natal chart. Returns (transits_dict, as_of_datetime_used).
-    """
     swe.set_sid_mode(swe.SIDM_LAHIRI)
     if as_of is None:
         as_of = datetime.datetime.now(pytz.utc)
