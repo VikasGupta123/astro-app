@@ -13,13 +13,17 @@ What it does:
    Swiss Ephemeris with the Lahiri ayanamsa): Rashi, Nakshatra, Lagna,
    Rahu/Ketu, whole-sign houses (with each planet's house/Bhava placement),
    and a computed Vimshottari Mahadasha/Antardasha timeline.
-3. Computes today's real planetary transits (Gochar) against your natal
+3. Shows a visual South Indian-style chart diagram plus quick highlight
+   cards (Lagna, Moon sign, Sun sign, current Dasha) right away - the full
+   planet-by-planet breakdown and dasha timeline are tucked into an
+   expander so the important stuff isn't buried.
+4. Computes today's real planetary transits (Gochar) against your natal
    Moon sign, including Sade Sati detection - recalculated fresh every time
    you open the app, so it naturally updates day to day.
-4. Gives a one-time Stella-written overview of the full Kundli, then lets
-   them chat with an AI astrologer persona whose answers are grounded in
-   all of the above, using the Claude API.
-5. Kundli Milan: Ashtakoot compatibility matching between two people's
+5. Gives a one-time Stella-written interpretation of the full Kundli, then
+   lets them chat with an AI astrologer persona whose answers are grounded
+   in all of the above, using the Claude API.
+6. Kundli Milan: Ashtakoot compatibility matching between two people's
    charts, plus individual Mangal Dosha (Manglik) checks, a grounded
    follow-up chat about the match, and a shareable text summary.
 
@@ -43,6 +47,12 @@ resolves it correctly. This is deliberately NOT wrapped in an st.form,
 because Streamlit forms only rerun on submit - a live-search box needs to
 rerun on every keystroke to fetch new suggestions.
 
+Note on styling: colors/fonts come from .streamlit/config.toml (a soft
+light lavender theme). A small amount of extra CSS is injected below for
+the chart diagram and highlight cards specifically - kept minimal and
+scoped to custom classes (not Streamlit's internal element names) so it's
+less likely to break on a Streamlit version bump.
+
 See README.md for full setup instructions, and DEPLOYMENT.md for how to put
 this online for others to try.
 """
@@ -56,6 +66,8 @@ from streamlit_searchbox import st_searchbox
 
 from astro_engine import (
     HOUSE_MEANINGS,
+    PLANET_SYMBOLS,
+    build_south_indian_grid,
     calculate_chart,
     chart_to_prompt_text,
     check_mangal_dosha,
@@ -199,6 +211,164 @@ words unless more detail is genuinely asked for.
 """
 
 
+def inject_custom_css():
+    """A small amount of custom styling on top of the .streamlit/config.toml
+    theme: the South Indian chart diagram grid, the quick-highlight stat
+    cards, and slightly rounder buttons. Scoped to custom CSS classes rather
+    than Streamlit's internal element names, so it's less likely to break on
+    a Streamlit version bump."""
+    st.markdown(
+        """
+        <style>
+        div.stButton > button {
+            border-radius: 10px;
+        }
+
+        .highlight-cards {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin: 10px 0 18px 0;
+        }
+        .highlight-card {
+            flex: 1 1 150px;
+            background: linear-gradient(160deg, #ffffff, #f3ecfd);
+            border: 1px solid #ddd0f5;
+            border-radius: 12px;
+            padding: 12px 14px;
+            box-shadow: 0 1px 3px rgba(90, 60, 160, 0.08);
+        }
+        .highlight-card .hc-label {
+            font-size: 0.72rem;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            color: #8a7aa8;
+            margin-bottom: 4px;
+        }
+        .highlight-card .hc-value {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #35284f;
+        }
+        .highlight-card .hc-sub {
+            font-size: 0.78rem;
+            color: #6f6089;
+            margin-top: 2px;
+        }
+
+        .kundli-chart-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            grid-template-rows: repeat(4, 1fr);
+            gap: 4px;
+            aspect-ratio: 1 / 1;
+            max-width: 620px;
+            margin: 6px auto 18px auto;
+            background: #e6d9f7;
+            border: 2px solid #8a63f2;
+            border-radius: 16px;
+            padding: 8px;
+        }
+        .kundli-cell {
+            background: #ffffff;
+            border: 1px solid #e2d6f7;
+            border-radius: 10px;
+            padding: 6px 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .kundli-lagna {
+            border: 2px solid #d99a2b;
+            background: #fff7e6;
+        }
+        .kundli-house-num {
+            font-size: 0.7rem;
+            color: #9382b8;
+            font-weight: 600;
+        }
+        .kundli-rashi {
+            font-size: 0.9rem;
+            color: #33284d;
+            font-weight: 700;
+            margin: 2px 0 4px 0;
+            line-height: 1.1;
+        }
+        .kundli-planets {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            align-items: center;
+            width: 100%;
+        }
+        .kundli-planet {
+            background: #8a63f2;
+            color: white;
+            font-size: 0.68rem;
+            padding: 1px 6px;
+            border-radius: 6px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .kundli-planet.retro {
+            background: #d9695f;
+        }
+        .kundli-center {
+            grid-row: 2 / span 2;
+            grid-column: 2 / span 2;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+        }
+        .kundli-center-label {
+            color: #8a63f2;
+            font-weight: 700;
+            font-size: 1rem;
+            opacity: 0.45;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_south_indian_chart_html(grid: list) -> str:
+    """Turns astro_engine.build_south_indian_grid()'s output into an HTML/CSS
+    grid - a South Indian-style Kundli chart diagram, rendered via
+    st.markdown(unsafe_allow_html=True). Uses full planet names (the chart
+    is sized generously enough to fit them) rather than 2-letter codes."""
+    cells_html = []
+    for r, row in enumerate(grid):
+        for c, cell in enumerate(row):
+            if cell is None:
+                if r == 1 and c == 1:
+                    cells_html.append(
+                        '<div class="kundli-cell kundli-center">'
+                        '<span class="kundli-center-label">Kundli</span></div>'
+                    )
+                continue
+            planets_html = "".join(
+                f'<span class="kundli-planet{" retro" if p["retrograde"] else ""}">'
+                f'{p["name"]}{" ℞" if p["retrograde"] else ""}</span>'
+                for p in cell["planets"]
+            )
+            lagna_class = " kundli-lagna" if cell["is_lagna"] else ""
+            cells_html.append(
+                f'<div class="kundli-cell{lagna_class}" style="grid-row:{r + 1}; grid-column:{c + 1};">'
+                f'<div class="kundli-house-num">House {cell["house"]}</div>'
+                f'<div class="kundli-rashi">{cell["rashi"]}</div>'
+                f'<div class="kundli-planets">{planets_html}</div>'
+                f'</div>'
+            )
+    return '<div class="kundli-chart-grid">' + "".join(cells_html) + "</div>"
+
+
 def _get_secret_key():
     """Reads ANTHROPIC_API_KEY from Streamlit's secrets manager (used when
     deployed on Streamlit Community Cloud with a shared key). Safe to call
@@ -336,58 +506,94 @@ def birth_details_form():
             st.error(str(e))
 
 
-def render_chart_summary():
-    chart = st.session_state.get("chart")
-    if not chart:
-        return
-    with st.expander("Your Kundli (Vedic chart)", expanded=False):
-        # Birth details recap, right alongside the location - so it's always
-        # clear exactly which chart you're looking at.
-        user_name = st.session_state.get("user_name", "the user")
-        place_label = st.session_state.get("place_label")
-        coords = st.session_state.get("place_coords")
-        st.markdown("**Birth details used for this Kundli:**")
-        st.write(f"- Name: {user_name}")
-        st.write(f"- Born: {chart['local_datetime']} (timezone {chart['timezone']})")
-        if place_label and coords:
-            st.write(f"- Place: {place_label} ({coords[0]:.4f}, {coords[1]:.4f})")
-        st.caption(f"Ayanamsa (Lahiri): {chart['ayanamsa']}°")
+def render_kundli_highlights(chart: dict):
+    """The important stuff, visible immediately (no clicks needed): quick
+    stat cards for Lagna, Moon sign, Sun sign, and current Dasha (Mahadasha
+    and Antardasha shown together), plus the South Indian-style visual
+    chart diagram."""
+    asc = chart["ascendant"]
+    moon = chart["planets"]["Moon"]
+    sun = chart["planets"]["Sun"]
+    dasha_list = chart.get("dasha", [])
+    maha, antar = find_current_dasha(dasha_list) if dasha_list else (None, None)
 
-        asc = chart["ascendant"]
-        st.write(
-            f"**Lagna (Ascendant):** {asc['rashi']} ({asc['rashi_english']}) "
-            f"{asc['degree']}° · Nakshatra {asc['nakshatra']} pada {asc['pada']}"
-        )
+    if maha and antar:
+        dasha_value = f"{maha['lord']} → {antar['lord']}"
+        dasha_sub = "Mahadasha → Antardasha"
+    elif maha:
+        dasha_value = maha["lord"]
+        dasha_sub = "Mahadasha"
+    else:
+        dasha_value = "—"
+        dasha_sub = ""
+
+    place_label = st.session_state.get("place_label")
+    user_name = st.session_state.get("user_name", "the user")
+    st.caption(
+        f"For **{user_name}** · born {chart['local_datetime']}"
+        + (f" · {place_label}" if place_label else "")
+    )
+
+    cards_html = f"""
+    <div class="highlight-cards">
+      <div class="highlight-card">
+        <div class="hc-label">Lagna (Ascendant)</div>
+        <div class="hc-value">{asc['rashi']}</div>
+        <div class="hc-sub">{asc['rashi_english']} · {asc['degree']}°</div>
+      </div>
+      <div class="highlight-card">
+        <div class="hc-label">Chandra Rashi (Moon)</div>
+        <div class="hc-value">{moon['rashi']}</div>
+        <div class="hc-sub">{moon['rashi_english']} · {moon['nakshatra']}</div>
+      </div>
+      <div class="highlight-card">
+        <div class="hc-label">Surya Rashi (Sun)</div>
+        <div class="hc-value">{sun['rashi']}</div>
+        <div class="hc-sub">{sun['rashi_english']} · {ordinal(sun['house'])} house</div>
+      </div>
+      <div class="highlight-card">
+        <div class="hc-label">Current Dasha</div>
+        <div class="hc-value">{dasha_value}</div>
+        <div class="hc-sub">{dasha_sub}</div>
+      </div>
+    </div>
+    """
+    st.markdown(cards_html, unsafe_allow_html=True)
+
+    grid = build_south_indian_grid(chart)
+    st.markdown(render_south_indian_chart_html(grid), unsafe_allow_html=True)
+    st.caption(
+        "South Indian style chart - each Rashi (sign) always sits in the same "
+        "box; the gold-highlighted box is your Lagna. Each box shows the "
+        "house number and every graha (planet) placed there."
+    )
+
+
+def render_chart_full_details(chart: dict):
+    """The full planet-by-planet breakdown and dasha timeline - tucked into
+    an expander since the highlights + chart diagram above already surface
+    the most useful information at a glance."""
+    with st.expander("Full chart details (every planet, house, and the full Dasha timeline)"):
+        st.caption(f"Ayanamsa (Lahiri): {chart['ayanamsa']}°")
 
         st.markdown("**Grahas (planets) - sign, house & meaning:**")
         for planet, data in chart["planets"].items():
+            symbol = PLANET_SYMBOLS.get(planet, "")
             retro = " ℞" if data["retrograde"] else ""
             house_meaning = HOUSE_MEANINGS[data["house"]]
             st.write(
-                f"- **{planet}**: {data['rashi']} ({data['rashi_english']}) "
+                f"- {symbol} **{planet}**: {data['rashi']} ({data['rashi_english']}) "
                 f"{data['degree']}°{retro} · {ordinal(data['house'])} house — {house_meaning}"
             )
 
         dasha_list = chart.get("dasha", [])
         if dasha_list:
-            maha, antar = find_current_dasha(dasha_list)
-            st.markdown("**Current Dasha:**")
-            if maha:
+            st.markdown("**Full Mahadasha timeline:**")
+            for m in dasha_list:
                 st.write(
-                    f"Mahadasha: **{maha['lord']}** "
-                    f"({maha['start'].strftime('%d %b %Y')} - {maha['end'].strftime('%d %b %Y')})"
+                    f"{m['lord']}: {m['start'].strftime('%d %b %Y')} - "
+                    f"{m['end'].strftime('%d %b %Y')}"
                 )
-                if antar:
-                    st.write(
-                        f"Antardasha: **{antar['lord']}** "
-                        f"({antar['start'].strftime('%d %b %Y')} - {antar['end'].strftime('%d %b %Y')})"
-                    )
-            with st.expander("Full Mahadasha timeline"):
-                for m in dasha_list:
-                    st.write(
-                        f"{m['lord']}: {m['start'].strftime('%d %b %Y')} - "
-                        f"{m['end'].strftime('%d %b %Y')}"
-                    )
 
 
 def render_gochar_summary():
@@ -419,23 +625,23 @@ def render_gochar_summary():
 
 
 def render_kundli_interpretation(chart: dict, api_key: str):
-    """One-time Stella-written overview of the full Kundli, shown right in
-    the Kundli section - same idea as the Kundli Milan interpretation, just
-    for a solo chart. Shown once per generated chart; the open-ended chat
-    below is where follow-up questions go."""
+    """One-time Stella-written interpretation of the full Kundli, shown right
+    in the Kundli section - same idea as the Kundli Milan interpretation,
+    just for a solo chart. Shown once per generated chart; the open-ended
+    chat below is where follow-up questions go."""
     interpretation = st.session_state.get("kundli_interpretation")
 
     if interpretation:
-        st.markdown("**Stella's reading of your Kundli:**")
+        st.markdown("**Stella's interpretation of your Kundli:**")
         st.markdown(interpretation)
         st.divider()
         return
 
     if not api_key:
-        st.info("Add your Anthropic API key in the sidebar to get Stella's full reading of your Kundli.")
+        st.info("Add your Anthropic API key in the sidebar to get Stella's full interpretation of your Kundli.")
         return
 
-    if st.button("✨ Get Stella's reading of your Kundli", type="primary"):
+    if st.button("✨ Get Stella's interpretation of your Kundli", type="primary"):
         chart_text = chart_to_prompt_text(chart, st.session_state.get("user_name", "the user"))
         gochar_text = gochar_to_prompt_text(chart)
         system_prompt = (
@@ -459,11 +665,12 @@ def chat_tab():
         birth_details_form()
         return
 
-    render_chart_summary()
-    render_gochar_summary()
-
-    with st.expander("✏️ Edit birth details / generate a different Kundli"):
+    with st.expander("✏️ Edit Birth Details"):
         birth_details_form()
+
+    render_kundli_highlights(chart)
+    render_chart_full_details(chart)
+    render_gochar_summary()
 
     api_key = get_api_key()
 
@@ -846,6 +1053,7 @@ def milan_tab():
 
 
 def main():
+    inject_custom_css()
     st.title("✨ AI Astrology Chat")
     st.caption("A prototype AI Vedic astrologer (Jyotishi), grounded in your real Kundli.")
     st.caption("_For entertainment and self-reflection - not medical, legal, or financial advice._")

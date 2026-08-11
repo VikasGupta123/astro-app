@@ -7,8 +7,9 @@ ayanamsa (the standard used by AstroSage, drikpanchang, and Indian
 government calendars), Nakshatra, Rahu/Ketu, whole-sign houses (Lagna),
 each planet's house (Bhava) placement, a computed Vimshottari Mahadasha/
 Antardasha timeline, today's real planetary transits (Gochar) including
-Sade Sati detection, and Ashtakoot Kundli Milan (marriage compatibility
-matching) between two charts, including Mangal Dosha detection.
+Sade Sati detection, a South Indian-style visual chart grid, and Ashtakoot
+Kundli Milan (marriage compatibility matching) between two charts, including
+Mangal Dosha detection.
 
 You generally do not need to edit this file. app.py calls into it.
 """
@@ -77,6 +78,32 @@ SANSKRIT_PLANET_NAMES = {
     "Rahu": "Rahu", "Ketu": "Ketu",
 }
 
+# Short 2-letter labels for the chart diagram cells (kept for reference /
+# possible future compact-view mode; the diagram currently uses full names).
+PLANET_ABBR = {
+    "Sun": "Su", "Moon": "Mo", "Mercury": "Me", "Venus": "Ve", "Mars": "Ma",
+    "Jupiter": "Ju", "Saturn": "Sa", "Rahu": "Ra", "Ketu": "Ke",
+}
+
+# Classical astrological glyphs, used for a bit of visual polish next to
+# planet names in the full breakdown.
+PLANET_SYMBOLS = {
+    "Sun": "☉", "Moon": "☽", "Mercury": "☿", "Venus": "♀", "Mars": "♂",
+    "Jupiter": "♃", "Saturn": "♄", "Rahu": "☊", "Ketu": "☋",
+}
+
+# South Indian chart layout: a fixed 4x4 grid where each Rashi always sits in
+# the same cell (unlike North Indian charts, where the Lagna's compartment is
+# always drawn at the top and everything rotates around it). The 4 center
+# cells are unused/merged into one decorative block. Values are indices into
+# RASHI_NAMES/RASHI_ENGLISH; None marks the unused center cells.
+SOUTH_INDIAN_LAYOUT = [
+    [11, 0, 1, 2],
+    [10, None, None, 3],
+    [9, None, None, 4],
+    [8, 7, 6, 5],
+]
+
 _tf = TimezoneFinder()
 _NAK_SPAN = 360.0 / 27.0
 
@@ -122,6 +149,8 @@ def find_timezone(lat: float, lon: float) -> str:
 
 
 def _geocode_open_meteo(place_name: str):
+    """Primary geocoder: Open-Meteo's free geocoding API. Returns None if it
+    can't find/reach anything, so the caller can fall back to Nominatim."""
     import requests
 
     try:
@@ -146,6 +175,8 @@ def _geocode_open_meteo(place_name: str):
 
 
 def _geocode_nominatim(place_name: str):
+    """Fallback geocoder: OpenStreetMap Nominatim, via geopy. Returns None if
+    it can't find/reach anything."""
     try:
         from geopy.geocoders import Nominatim
 
@@ -160,6 +191,10 @@ def _geocode_nominatim(place_name: str):
 
 
 def geocode_place(place_name: str):
+    """
+    Turn a place name like 'Jaipur, India' into (lat, lon, display_name).
+    Tries two free, keyless geocoding services in order.
+    """
     for geocoder in (_geocode_open_meteo, _geocode_nominatim):
         result = geocoder(place_name)
         if result is not None:
@@ -241,8 +276,16 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
       - Whole-sign houses (Bhava) from the Lagna.
       - A computed Vimshottari Mahadasha/Antardasha timeline from birth.
 
-    Uses the Lahiri ayanamsa throughout (set globally at module import).
+    Uses the Lahiri ayanamsa throughout (set globally at module import, and
+    re-pinned here defensively - see note below).
     """
+    # Re-set the sidereal mode right before use. In principle this is
+    # already set once at module import, but some hosting environments
+    # (observed on Streamlit Community Cloud) can end up with the Swiss
+    # Ephemeris library's global sidereal-mode state reverting to its
+    # default (Fagan-Bradley) between reruns of the script - re-setting it
+    # here every time is a cheap, defensive fix that removed a real
+    # ayanamsa discrepancy we hit between local and deployed results.
     swe.set_sid_mode(swe.SIDM_LAHIRI)
     tz = pytz.timezone(tz_name)
     local_dt = tz.localize(datetime.datetime.combine(birth_date, birth_time))
@@ -294,6 +337,49 @@ def calculate_chart(birth_date: datetime.date, birth_time: datetime.time,
     result["dasha"] = compute_vimshottari_dasha(moon_longitude, local_dt)
 
     return result
+
+
+def build_south_indian_grid(chart: dict) -> list:
+    """
+    Returns a 4x4 grid (list of lists) for rendering a South Indian style
+    Kundli chart diagram. Each cell is either None (the two unused center
+    cells) or a dict:
+      {rashi, rashi_english, house (1-12, from this chart's Lagna),
+       is_lagna (bool), planets: [{"name", "abbr", "retrograde"}]}
+
+    South Indian charts use FIXED sign positions - each Rashi always sits in
+    the same grid cell no matter whose chart it is - unlike North Indian
+    charts where the Lagna's compartment is always drawn at the top and
+    everything rotates. The house number written inside each cell is what
+    changes from person to person.
+    """
+    rashi_to_house = {rashi: house for house, rashi in chart["houses"].items()}
+    planets_by_rashi = {}
+    for pname, pdata in chart["planets"].items():
+        planets_by_rashi.setdefault(pdata["rashi"], []).append({
+            "name": pname,
+            "abbr": PLANET_ABBR.get(pname, pname[:2]),
+            "retrograde": pdata["retrograde"],
+        })
+    lagna_rashi = chart["ascendant"]["rashi"]
+
+    grid = []
+    for row in SOUTH_INDIAN_LAYOUT:
+        grid_row = []
+        for idx in row:
+            if idx is None:
+                grid_row.append(None)
+                continue
+            rashi = RASHI_NAMES[idx]
+            grid_row.append({
+                "rashi": rashi,
+                "rashi_english": RASHI_ENGLISH[idx],
+                "house": rashi_to_house.get(rashi),
+                "is_lagna": rashi == lagna_rashi,
+                "planets": planets_by_rashi.get(rashi, []),
+            })
+        grid.append(grid_row)
+    return grid
 
 
 def compute_vimshottari_dasha(moon_longitude: float, birth_dt: datetime.datetime) -> list:
