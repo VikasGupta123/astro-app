@@ -50,10 +50,10 @@ rerun on every keystroke to fetch new suggestions.
 
 Note on styling: colors/fonts come from .streamlit/config.toml (a soft
 light lavender theme). Extra CSS is injected below for the chart diagram,
-highlight cards, and chat bubble left/right layout - scoped to Streamlit's
-documented `data-testid` attributes (stChatMessage, stChatMessageAvatarUser,
-etc.) rather than internal class names, which is the more stable way to
-target Streamlit's built-in components, though these testids can still
+highlight cards, chat bubble left/right layout, and trimming Streamlit's
+large default top padding - scoped to Streamlit's documented `data-testid`
+attributes rather than internal class names, which is the more stable way
+to target Streamlit's built-in components, though these testids can still
 change on a major Streamlit version bump.
 
 See README.md for full setup instructions, and DEPLOYMENT.md for how to put
@@ -236,14 +236,23 @@ genuinely asked for.
 def inject_custom_css():
     """A small amount of custom styling on top of the .streamlit/config.toml
     theme: the South Indian chart diagram grid, the quick-highlight stat
-    cards, rounder buttons, and left/right chat bubbles (Stella on the
-    left, you on the right). The chat bubble rules key off Streamlit's
-    `data-testid` attributes for chat messages."""
+    cards, rounder buttons, left/right chat bubbles (Stella on the left,
+    you on the right), and a trimmed top page margin. The chat bubble and
+    top-margin rules key off Streamlit's `data-testid` attributes."""
     st.markdown(
         """
         <style>
         div.stButton > button {
             border-radius: 10px;
+        }
+
+        /* Trim Streamlit's large default top padding so the title/caption
+           header doesn't eat so much vertical space before the tabs. */
+        div[data-testid="stMainBlockContainer"] {
+            padding-top: 1.8rem;
+        }
+        h1 {
+            margin-bottom: 0.2rem !important;
         }
 
         .highlight-cards {
@@ -1109,8 +1118,10 @@ def milan_tab():
 def main():
     inject_custom_css()
     st.title("✨ AI Astrology Chat")
-    st.caption("A prototype AI Vedic astrologer (Jyotishi), grounded in your real Kundli.")
-    st.caption("_For entertainment and self-reflection - not medical, legal, or financial advice._")
+    st.caption(
+        "A prototype AI Vedic astrologer (Jyotishi), grounded in your real Kundli. "
+        "_For entertainment and self-reflection - not medical, legal, or financial advice._"
+    )
 
     sidebar_api_key()
 
